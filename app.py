@@ -16,7 +16,7 @@ RESULT_NAME = "результат_проверки.xlsx"   # имя файла, 
 # ---------------------------------------------------------------
 # 2. НАСТРОЙКИ ПОРОГОВ
 # ---------------------------------------------------------------
-MANDATORY_LIMIT = 1_000_000   # от этой суммы - обязательный контроль
+CASH_LIMIT = 1_000_000        # операции с наличными от этой суммы - обязательный контроль
 BIG_AMOUNT = 300_000          # крупная операция
 SMALL_AMOUNT = 100_000        # мелкая операция
 
@@ -33,6 +33,21 @@ PRIORITY = {MARK_OK: 0, MARK_SUSPICIOUS: 1, MARK_MANDATORY: 2}
 
 REQUIRED_COLUMNS = ["ФИО", "Дата и время", "Сумма", "Тип операции"]
 
+# Необязательные столбцы: если их нет в файле, соответствующее правило не срабатывает
+CASH_COLUMN = "Способ"        # "Наличные" или "Безналичные"
+COUNTRY_COLUMN = "Страна"     # страна, откуда пришёл перевод или куда он ушёл
+
+CASH_VALUES = {"наличные", "наличными", "нал", "cash"}
+
+# Страны из "чёрного списка" ФАТФ (не выполняют меры против отмывания
+# денег и финансирования терроризма). Список можно дополнять.
+HIGH_RISK_COUNTRIES = {
+    "иран", "iran",
+    "кндр", "северная корея", "корейская народно-демократическая республика",
+    "north korea", "dprk",
+    "мьянма", "бирма", "myanmar",
+}
+
 
 def analyze(tables):
     """Вся проверка из исходного скрипта. На входе - список таблиц,
@@ -44,6 +59,13 @@ def analyze(tables):
     df = pd.concat(tables, ignore_index=True)
     df["Дата и время"] = pd.to_datetime(df["Дата и время"], dayfirst=True)
     df = df.sort_values(["ФИО", "Дата и время"]).reset_index(drop=True)
+
+    # Если необязательных столбцов нет - создаём пустые, чтобы код не падал
+    for column in (CASH_COLUMN, COUNTRY_COLUMN):
+        if column not in df.columns:
+            df[column] = ""
+    df[CASH_COLUMN] = df[CASH_COLUMN].fillna("")
+    df[COUNTRY_COLUMN] = df[COUNTRY_COLUMN].fillna("")
 
     df["Маркер"] = MARK_OK
     df["Причина"] = ""
@@ -70,10 +92,18 @@ def analyze(tables):
     # -----------------------------------------------------------
     for name, person in df.groupby("ФИО"):
 
-        # Правило 1: сумма от 1 000 000
+        # Правило 1: операция с наличными от 1 000 000
         for i, op in person.iterrows():
-            if op["Сумма"] >= MANDATORY_LIMIT:
-                set_marker(i, MARK_MANDATORY, "Сумма от 1 000 000 руб.")
+            is_cash = str(op[CASH_COLUMN]).strip().lower() in CASH_VALUES
+            if is_cash and op["Сумма"] >= CASH_LIMIT:
+                set_marker(i, MARK_MANDATORY, "Операция с наличными от 1 000 000 руб.")
+
+        # Правило 1.1: перевод из страны или в страну из чёрного списка ФАТФ
+        for i, op in person.iterrows():
+            country = str(op[COUNTRY_COLUMN]).strip().lower()
+            if country in HIGH_RISK_COUNTRIES:
+                set_marker(i, MARK_MANDATORY,
+                           f"Перевод из/в страну высокого риска ({op[COUNTRY_COLUMN]})")
 
         big = person[person["Сумма"] >= BIG_AMOUNT]
 
@@ -183,7 +213,8 @@ PAGE = """
 <body>
   <h1>Мониторинг операций</h1>
   <p>Загрузите один или несколько Excel-файлов (.xlsx) со столбцами:
-     ФИО, Дата и время, Сумма, Тип операции.</p>
+     ФИО, Дата и время, Сумма, Тип операции.
+     Дополнительно можно добавить столбцы Способ (Наличные / Безналичные) и Страна.</p>
   <form method="post" action="/check" enctype="multipart/form-data">
     <p><input type="file" name="files" accept=".xlsx,.xlsm" multiple required></p>
     <p><button type="submit">Проверить и скачать результат</button></p>
