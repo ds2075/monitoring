@@ -28,8 +28,9 @@ MANY_OPS_RULES = [
 
 MARK_MANDATORY = "ОБЯЗАТЕЛЬНЫЙ КОНТРОЛЬ"
 MARK_SUSPICIOUS = "ПОДОЗРИТЕЛЬНАЯ"
+MARK_BOTH = "ОБЯЗАТЕЛЬНЫЙ КОНТРОЛЬ + ПОДОЗРИТЕЛЬНАЯ"
 MARK_OK = "ВСЁ НОРМАЛЬНО"
-PRIORITY = {MARK_OK: 0, MARK_SUSPICIOUS: 1, MARK_MANDATORY: 2}
+PRIORITY = {MARK_OK: 0, MARK_SUSPICIOUS: 1, MARK_MANDATORY: 2, MARK_BOTH: 3}
 
 REQUIRED_COLUMNS = ["ФИО", "Дата и время", "Сумма", "Тип операции"]
 
@@ -71,8 +72,12 @@ def analyze(tables):
     df["Причина"] = ""
 
     def set_marker(index, marker, reason):
-        """Ставит маркер, только если он строже текущего."""
-        if PRIORITY[marker] > PRIORITY[df.at[index, "Маркер"]]:
+        """Ставит маркер, только если он строже текущего.
+        Обязательный контроль + подозрительная = общий маркер MARK_BOTH."""
+        current = df.at[index, "Маркер"]
+        if {current, marker} == {MARK_MANDATORY, MARK_SUSPICIOUS}:
+            df.at[index, "Маркер"] = MARK_BOTH
+        elif PRIORITY[marker] > PRIORITY[current]:
             df.at[index, "Маркер"] = marker
         if reason not in df.at[index, "Причина"]:
             df.at[index, "Причина"] += reason + "; "
@@ -153,15 +158,20 @@ def analyze(tables):
     # -----------------------------------------------------------
     summary_rows = []
     for name, person in df.groupby("ФИО"):
+        both = (person["Маркер"] == MARK_BOTH).sum()
         mandatory = (person["Маркер"] == MARK_MANDATORY).sum()
         suspicious = (person["Маркер"] == MARK_SUSPICIOUS).sum()
-        if mandatory > 0:
+        if both > 0:
+            verdict = ("есть операции обязательного контроля "
+                       "с признаками подозрительности")
+        elif mandatory > 0:
             verdict = "есть операции обязательного контроля"
         elif suspicious > 0:
             verdict = "есть подозрительные операции"
         else:
             verdict = "странных операций нет"
         summary_rows.append({"ФИО": name,
+                             "Обяз. контроль + подозрительная": both,
                              "Обязательный контроль": mandatory,
                              "Подозрительных": suspicious,
                              "Вердикт": verdict})
@@ -179,6 +189,7 @@ def analyze(tables):
     wb = load_workbook(buffer)
     ws = wb["Операции"]
     colors = {
+        MARK_BOTH: PatternFill("solid", fgColor="D9B8F0"),        # фиолетовый
         MARK_MANDATORY: PatternFill("solid", fgColor="FFC7CE"),   # красный
         MARK_SUSPICIOUS: PatternFill("solid", fgColor="FFEB9C"),  # жёлтый
         MARK_OK: PatternFill("solid", fgColor="C6EFCE"),          # зелёный
